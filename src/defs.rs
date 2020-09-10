@@ -1,0 +1,1 @@
+pub const SERVER_NAME : &str = "rusty-server";
