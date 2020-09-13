@@ -30,30 +30,43 @@ async fn handle_connection(mut stream: async_std::net::TcpStream) -> std::io::Re
     Ok(())
 }
 
-async fn server(mut pool: TaskPool) -> std::io::Result<()> {
+async fn server(streams: Arc<Mutex<Vec<async_std::net::TcpStream>>>) -> std::io::Result<()> {
     let listener = async_std::net::TcpListener::bind("127.0.0.1:3000").await?;
     let mut incoming = listener.incoming();
-
-    let mut lastDispatch = std::time::Instant::now();
-    let mut streams: Vec<async_std::net::TcpStream> = Vec::new();
     while let Some(stream) = incoming.next().await {
         let stream = stream?;
         println!("New connection");
-        streams.push(stream);
-        if (lastDispatch.elapsed().as_millis() > 1) {
-            pool.execute(streams.clone());
-            streams.clear();
-            lastDispatch = std::time::Instant::now();
-        }
+        let mut s = streams.lock().await;
+        s.push(stream);
+        drop(s);
+        println!("disp");
     }
 
     Ok(())
 }
+async fn start_loop(streams: Arc<Mutex<Vec<async_std::net::TcpStream>>>) {
+    let mut pool = TaskPool::new(4).await;
+    let mut interval = async_std::stream::interval(std::time::Duration::from_millis(1));
+    while let Some(_) = interval.next().await {
+        let mut l = streams.lock().await;
+        if l.len() > 0 {
+            let mut new_streams: Vec<async_std::net::TcpStream> = Vec::new();
+            for s in l.clone() {
+                new_streams.push(s);
+            }
+            pool.execute(new_streams);
 
+            l.clear();
+        }
+        drop(l);
+    }
+}
 #[async_std::main]
 async fn main() -> std::io::Result<()> {
-    let mut pool = TaskPool::new(4).await;
-    server(pool).await;
+    let streams: Arc<Mutex<Vec<async_std::net::TcpStream>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut streams1 = streams.clone();
+    let mut streams2 = streams.clone();
+    futures::join!(server(streams1), start_loop(streams2));
     Ok(())
 }
 
@@ -67,7 +80,6 @@ use async_std::sync::Mutex;
 pub struct TaskPool {
     workers: Vec<Worker>,
     sender: mpsc::Sender<Message>,
-    tasks: Job,
 }
 
 type Job = Vec<async_std::net::TcpStream>;
@@ -107,10 +119,11 @@ impl TaskPool {
             workers.push(Worker::new(id, Arc::clone(&receiver)).await);
         }
 
-        TaskPool { workers, sender, tasks: Vec::new() }
+        TaskPool { workers, sender }
     }
     pub fn execute(&mut self, streams: Vec<async_std::net::TcpStream>)
     {
+//        self.tasks.push(stream);
 //        let job :Vec<async_std::net::TcpStream>= Vec::new();
 //        self.sender.send(Message::NewJob(job)).unwrap();
         self.sender.send(Message::NewJob(streams)).unwrap();
