@@ -26,6 +26,7 @@ async fn handle_connection(mut stream: async_std::net::TcpStream) -> std::io::Re
         stream.write(b"HTTP/1.1 200 OK\r\n\r\n").await?;
         let mut w = async_std::io::BufWriter::new(stream);
         async_std::io::copy(&mut (r.unwrap()), &mut w).await?;
+        w.flush().await?;
     }
     Ok(())
 }
@@ -46,7 +47,7 @@ async fn server(streams: Arc<Mutex<Vec<async_std::net::TcpStream>>>) -> std::io:
 }
 async fn start_loop(streams: Arc<Mutex<Vec<async_std::net::TcpStream>>>) {
     let mut pool = TaskPool::new(4).await;
-    let mut interval = async_std::stream::interval(std::time::Duration::from_millis(1));
+    let mut interval = async_std::stream::interval(std::time::Duration::from_millis(4));
     while let Some(_) = interval.next().await {
         let mut l = streams.lock().await;
         if l.len() > 0 {
@@ -76,6 +77,7 @@ use std::sync::Arc;
 //use std::sync::Mutex;
 use std::thread;
 use async_std::sync::Mutex;
+use futures::FutureExt;
 
 pub struct TaskPool {
     workers: Vec<Worker>,
@@ -163,10 +165,11 @@ impl Worker {
             match message {
                 Message::NewJob(job) => {
                     println!("Worker {} received {} connections", id, job.len());
+                    let mut tasks = Vec::new();
                     for task in job {
-                        handle_connection(task).await;
+                        tasks.push(handle_connection(task));
                     }
-//                    async_std::task::block_on(handle_connection(*job));
+                    futures::future::join_all(tasks).await;
                 }
                 Message::Terminate => {
                     println!("Worker {} was told to terminate.", id);
