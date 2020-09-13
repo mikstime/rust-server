@@ -1,40 +1,171 @@
-use std::net::TcpStream;
-use std::path::Path;
-use std::io::*;
+#![feature(async_closure)]
 
+use async_std::io::*;
+use async_std::prelude::*;
 
+//mod taskpool;
 mod open_file;
 mod request;
-async fn handle_connection(mut stream: std::net::TcpStream) -> std::io::Result<()> {
+//mod taskpool;
+
+async fn handle_connection(mut stream: async_std::net::TcpStream) -> std::io::Result<()> {
     let mut buffer = [0; 4096];
-    stream.read(&mut buffer);
-    println!("Request: {}", String::from_utf8_lossy(&buffer[..]));
+    stream.read(&mut buffer).await?;
+//    println!("Request: {}", String::from_utf8_lossy(&buffer[..]));
     let req = request::Request::new(&buffer).await;
-    let response = "HTTP/1.1 200 OK\r\n\r\n";
-    stream.write(response.as_bytes())?;
-    let mut w = std::io::BufWriter::new(stream);
-    let mut r = open_file::open_file(req.path()).await;
+
+
+//    let time = rand::random::<f32>() * 5.0;
+//    println!("{}", time);
+//    async_std::task::sleep(std::time::Duration::from_secs(time as u64)).await;
+    let r = open_file::open_file(req.path()).await;
     if !r.is_ok() {
-        println!("Hello!");
-        w.write(b"404 Not Found HTTP/1.1");
-        println!("Hello!");
+        stream.write(b"HTTP/1.1 404 Not Found\r\n\r\n").await?;
     } else {
-        std::io::copy(&mut (r.unwrap()),&mut w);
+        let response = b"HTTP/1.1 200 OK\r\n\r\n";
+        stream.write(b"HTTP/1.1 200 OK\r\n\r\n").await?;
+        let mut w = async_std::io::BufWriter::new(stream);
+        async_std::io::copy(&mut (r.unwrap()), &mut w).await?;
     }
     Ok(())
 }
-#[async_std::main]
-async fn main () {
-    let listener = std::net::TcpListener::bind("127.0.0.1:3000").unwrap();
 
+async fn server(mut pool: TaskPool) -> std::io::Result<()> {
+    let listener = async_std::net::TcpListener::bind("127.0.0.1:3000").await?;
     let mut incoming = listener.incoming();
 
-    for stream in listener.incoming() {
-        let stream = stream.unwrap();
-
-        if let Err(e) = handle_connection(stream).await {
-            println!("{:?}", e);
+    let mut lastDispatch = std::time::Instant::now();
+    let mut streams: Vec<async_std::net::TcpStream> = Vec::new();
+    while let Some(stream) = incoming.next().await {
+        let stream = stream?;
+        println!("New connection");
+        streams.push(stream);
+        if (lastDispatch.elapsed().as_millis() > 1) {
+            pool.execute(streams.clone());
+            streams.clear();
+            lastDispatch = std::time::Instant::now();
         }
     }
-    println!("Exit");
+
+    Ok(())
+}
+
+#[async_std::main]
+async fn main() -> std::io::Result<()> {
+    let mut pool = TaskPool::new(4).await;
+    server(pool).await;
+    Ok(())
+}
+
+
+use std::sync::mpsc;
+use std::sync::Arc;
+//use std::sync::Mutex;
+use std::thread;
+use async_std::sync::Mutex;
+
+pub struct TaskPool {
+    workers: Vec<Worker>,
+    sender: mpsc::Sender<Message>,
+    tasks: Job,
+}
+
+type Job = Vec<async_std::net::TcpStream>;
+
+enum Message {
+    NewJob(Job),
+    Terminate,
+}
+
+impl TaskPool {
+    /// Create a new ThreadPool.
+    ///
+    /// The size is the number of threads in the pool.
+    ///
+    /// # Panics
+    ///
+    /// The `new` function will panic if the size is zero.
+//    pub async fn start_loop(&mut self) {
+//        let mut interval = async_std::stream::interval(std::time::Duration::from_millis(1));
+//        while let Some(_) = interval.next().await {
+//            if self.tasks.len() > 0 {
+//                self.sender.send(Message::NewJob(self.tasks.clone())).unwrap();
+//                self.tasks.clear();
+//            }
+//        }
+//    }
+    pub async fn new(size: usize) -> TaskPool {
+        assert!(size > 0);
+
+        let (sender, receiver) = mpsc::channel();
+
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            workers.push(Worker::new(id, Arc::clone(&receiver)).await);
+        }
+
+        TaskPool { workers, sender, tasks: Vec::new() }
+    }
+    pub fn execute(&mut self, streams: Vec<async_std::net::TcpStream>)
+    {
+//        let job :Vec<async_std::net::TcpStream>= Vec::new();
+//        self.sender.send(Message::NewJob(job)).unwrap();
+        self.sender.send(Message::NewJob(streams)).unwrap();
+    }
+}
+
+impl Drop for TaskPool {
+    fn drop(&mut self) {
+        println!("Sending terminate message to all workers.");
+
+        for _ in &self.workers {
+            self.sender.send(Message::Terminate).unwrap();
+        }
+
+        println!("Shutting down all workers.");
+
+        for worker in &mut self.workers {
+            println!("Shutting down worker {}", worker.id);
+
+            if let Some(task) = worker.task.take() {
+                drop(task);//.join().unwrap();
+            }
+        }
+    }
+}
+
+struct Worker {
+    id: usize,
+    task: Option<async_std::task::JoinHandle<()>>,
+}
+
+impl Worker {
+    async fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Message>>>) -> Worker {
+        let task = async_std::task::spawn((async move || loop {
+            let message = receiver.lock().await.recv().unwrap();
+
+            match message {
+                Message::NewJob(job) => {
+                    println!("Worker {} received {} connections", id, job.len());
+                    for task in job {
+                        handle_connection(task).await;
+                    }
+//                    async_std::task::block_on(handle_connection(*job));
+                }
+                Message::Terminate => {
+                    println!("Worker {} was told to terminate.", id);
+
+                    break;
+                }
+            }
+        })());
+
+        Worker {
+            id,
+            task: Some(task),
+        }
+    }
 }

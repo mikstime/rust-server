@@ -1,9 +1,5 @@
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::fs::File;
-use std::fmt::Error;
-
-//@TODO make async
+use async_std::fs::File;//std::fs::File;
 //@TODO refactor
 // If no file name mentioned serve index.html
 const BASE_DIR : &str = "./public/httptest/";
@@ -24,6 +20,6 @@ pub async fn open_file(path: &Path) -> std::io::Result<File> {
         path_to_use = path_to_use[1..].parse().unwrap()
     }
 
-    let mut path_combined: PathBuf = [BASE_DIR, path_to_use.as_str()].iter().collect();
-    File::open(path_combined.to_str().unwrap())
+    let path_combined: PathBuf = [BASE_DIR, path_to_use.as_str()].iter().collect();
+    File::open(path_combined.to_str().unwrap()).await
 }
