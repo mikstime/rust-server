@@ -1,14 +1,14 @@
+use async_std::prelude::*;
+use async_std::sync::Arc;
 use std::sync::mpsc;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::thread;
+use async_std::sync::Mutex;
 
 pub struct TaskPool {
     workers: Vec<Worker>,
     sender: mpsc::Sender<Message>,
 }
 
-type Job = Box<async_std::net::TcpStream>;
+type Job = Vec<async_std::net::TcpStream>;
 
 enum Message {
     NewJob(Job),
@@ -16,14 +16,12 @@ enum Message {
 }
 
 impl TaskPool {
-    /// Create a new ThreadPool.
-    ///
-    /// The size is the number of threads in the pool.
-    ///
-    /// # Panics
-    ///
-    /// The `new` function will panic if the size is zero.
-    pub fn new(size: usize) -> TaskPool {
+    pub async fn new<F, Fut, T>(size: usize, handler: F) -> TaskPool
+        where
+            F: Fn(async_std::net::TcpStream)-> Fut + Send + Copy + 'static,
+            T: Send,
+            Fut: Future<Output = T> + Send + 'static,
+    {
         assert!(size > 0);
 
         let (sender, receiver) = mpsc::channel();
@@ -33,17 +31,14 @@ impl TaskPool {
         let mut workers = Vec::with_capacity(size);
 
         for id in 0..size {
-            workers.push(Worker::new(id, Arc::clone(&receiver)));
+            workers.push(Worker::new(id, Arc::clone(&receiver), handler).await);
         }
 
         TaskPool { workers, sender }
     }
-
-    pub fn execute(&mut self, stream: async_std::net::TcpStream)
+    pub fn execute(&mut self, streams: Vec<async_std::net::TcpStream>)
     {
-        let job = Box::new(stream);
-
-        self.sender.send(Message::NewJob(job)).unwrap();
+        self.sender.send(Message::NewJob(streams)).unwrap();
     }
 }
 
@@ -61,7 +56,7 @@ impl Drop for TaskPool {
             println!("Shutting down worker {}", worker.id);
 
             if let Some(task) = worker.task.take() {
-                task;//.join().unwrap();
+                drop(task);//.join().unwrap();
             }
         }
     }
@@ -73,17 +68,23 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Message>>>) -> Worker {
+    async fn new<F, Fut, T>(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Message>>>, handler: F) -> Worker
+        where
+            F: Fn(async_std::net::TcpStream)-> Fut + Send + 'static,
+            T: Send,
+            Fut: Future<Output = T> + Send + 'static,
+    {
         let task = async_std::task::spawn((async move || loop {
-            let message = receiver.lock().unwrap().recv().unwrap();
+            let message = receiver.lock().await.recv().unwrap();
 
             match message {
                 Message::NewJob(job) => {
-                    println!("Worker {} got a job; executing.", id);
-
-                    println!("Handle");
-                    handle_connection(*job).await;
-//                    async_std::task::block_on(handle_connection(*job));
+                    println!("Worker {} received {} connections", id, job.len());
+                    let mut tasks = Vec::new();
+                    for task in job {
+                        tasks.push(handler(task));
+                    }
+                    futures::future::join_all(tasks).await;
                 }
                 Message::Terminate => {
                     println!("Worker {} was told to terminate.", id);
@@ -98,13 +99,4 @@ impl Worker {
             task: Some(task),
         }
     }
-}
-
-async fn handle_connection(mut stream: async_std::net::TcpStream) -> std::io::Result<()> {
-    use async_std::io::*;
-    use async_std::prelude::*;
-    let mut buffer = [0; 4096];
-    stream.read(&mut buffer).await?;
-    println!("Request: {}", String::from_utf8_lossy(&buffer[..]));
-    Ok(())
 }
