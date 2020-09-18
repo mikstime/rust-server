@@ -9,11 +9,11 @@
 ### Тестирование
 Запустить nginx
 ```shell script
-docker build -t rustserver:nginx ./nginx && docker run -p 80:80 rustserver:nginx
+docker build -t rustserver:nginx ./nginx && docker run -v /etc/httpd.conf:/etc/httpd.conf:ro -v /var/www/html:/var/www/html:ro -p 80:80 rustserver:nginx
 ```
 Запустить rust
 ```shell script
-docker build -t rustserver . && docker run -p 80:80 rustserver
+docker build -t rustserver . && docker run -v /etc/httpd.conf:/etc/httpd.conf:ro -v /var/www/html:/var/www/html:ro -p 80:80 rustserver
 ```
 Тестирование функциональности
 ```shell script
