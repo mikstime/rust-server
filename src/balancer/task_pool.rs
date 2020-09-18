@@ -18,9 +18,9 @@ enum Message {
 impl TaskPool {
     pub async fn new<F, Fut, T>(size: usize, handler: F) -> TaskPool
         where
-            F: Fn(async_std::net::TcpStream)-> Fut + Send + Copy + 'static,
+            F: Fn(async_std::net::TcpStream) -> Fut + Send + Copy + 'static,
             T: Send,
-            Fut: Future<Output = T> + Send + 'static,
+            Fut: Future<Output=T> + Send + 'static,
     {
         assert!(size > 0);
 
@@ -70,16 +70,15 @@ struct Worker {
 impl Worker {
     async fn new<F, Fut, T>(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Message>>>, handler: F) -> Worker
         where
-            F: Fn(async_std::net::TcpStream)-> Fut + Send + 'static,
+            F: Fn(async_std::net::TcpStream) -> Fut + Send + 'static,
             T: Send,
-            Fut: Future<Output = T> + Send + 'static,
+            Fut: Future<Output=T> + Send + 'static,
     {
         let task = async_std::task::spawn((async move || loop {
             let message = receiver.lock().await.recv().unwrap();
 
             match message {
                 Message::NewJob(job) => {
-                    println!("Worker {} received {} connections", id, job.len());
                     let mut tasks = Vec::new();
                     for task in job {
                         tasks.push(handler(task));

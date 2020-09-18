@@ -17,16 +17,17 @@ pub async fn run<F, Fut, T>(streams: Connections, handler: F)
     let mut interval = async_std::stream::interval(std::time::Duration::from_millis(4));
 
     while let Some(_) = interval.next().await {
-        // Lock streams to get length and clear if necessary
+        // Lock streams to get length and and process connections if needed
         let mut locked_streams = streams.lock().await;
         if locked_streams.len() > 0 {
             let mut new_streams: Vec<async_std::net::TcpStream> = Vec::new();
-            for stream in locked_streams.clone() {
-                new_streams.push(stream);
+            while locked_streams.len() > 0 && new_streams.len() < 24 {
+                new_streams.push(locked_streams.pop().unwrap());
             }
             pool.execute(new_streams);
-
-            locked_streams.clear();
+            if locked_streams.len() > 500 {
+                async_std::task::sleep(std::time::Duration::from_millis(4)).await;
+            }
         }
         // Unlock streams
         drop(locked_streams);

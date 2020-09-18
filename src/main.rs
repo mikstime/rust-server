@@ -1,5 +1,4 @@
 #![feature(async_closure)] //nightly mode feature
-use async_std::prelude::*;
 use async_std::sync::{Arc, Mutex};
 
 mod handler;
@@ -15,6 +14,7 @@ async fn main() -> std::io::Result<()> {
     let streams: Connections = Arc::new(Mutex::new(Vec::new()));
     let streams1 = streams.clone();
     let streams2 = streams.clone();
+    // Run balancer and server concurrently
     futures::join!(
         server::run(streams1),
         balancer::run(streams2, handler::handle_connection),

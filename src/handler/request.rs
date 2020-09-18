@@ -1,5 +1,6 @@
 use async_std::path::{Path, PathBuf};
 use async_std::io::*;
+
 #[derive(Clone)]
 pub struct Request {
     _stream: async_std::net::TcpStream,
@@ -7,7 +8,9 @@ pub struct Request {
     _protocol: String,
     _method: String,
 }
-const BASE_DIR : &str = "./public/httptest/";
+
+const BASE_DIR: &str = "./public/";
+
 fn prepare_path(path: PathBuf) -> PathBuf {
     let path = path.as_path();
     let _ = match path.file_name() {
@@ -25,20 +28,28 @@ fn prepare_path(path: PathBuf) -> PathBuf {
     }
 
     let path_combined: PathBuf = [BASE_DIR, path_to_use.as_str()].iter().collect();
-    return path_combined
+    return path_combined;
 }
+
 impl Request {
     pub async fn new(mut stream: async_std::net::TcpStream) -> Request {
-        let mut buffer = [0; 4096];
+        let mut buffer = [0; 1024];
         stream.read(&mut buffer).await;
         let strings = String::from_utf8_lossy(&buffer);
         // Split request by rows
         let split_strings = strings.split("\r\n").collect::<Vec<&str>>();
         // First line contains Method, Path, Protocol
-        let first_line_split = split_strings[0].split(" ").collect::<Vec<&str>>();
+        let mut first_line_split = split_strings[0].split(" ").collect::<Vec<&str>>();
         // Extract them
         let method = first_line_split[0].trim();
-        let path = prepare_path(PathBuf::from(first_line_split[1].trim()));
+        if first_line_split.len() < 3 {
+            while first_line_split.len() < 3 {
+                first_line_split.push("");
+            }
+        }
+        let url = percent_encoding::percent_decode(first_line_split[1].trim().as_bytes()).decode_utf8_lossy().to_string();
+        let split_url: Vec<&str> = url.split("?").collect();
+        let path = prepare_path(PathBuf::from(split_url[0]));
         let protocol = first_line_split[2].trim();
         Request {
             _stream: stream,
