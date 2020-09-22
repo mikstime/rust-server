@@ -22,7 +22,7 @@ COPY  ./static /etc/nginx/static
 
 COPY  ./dockerPing.sh .
 
-EXPOSE 3000
+EXPOSE 80
 
 CMD service nginx restart && bash ./dockerPing.sh
 
